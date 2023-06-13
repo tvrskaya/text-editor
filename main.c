@@ -7,6 +7,8 @@
 #include "font.h"
 #include <SDL.h>
 
+#define FONT_SCALE 5
+
 void scc(int code)
 {
 	if (code < 0)
@@ -26,6 +28,96 @@ void *scp(void *ptr)
 	return ptr;
 }
 
+
+#define ROW_CAPACITY 16
+#define COLS_AMOUNT 16
+#define BUFFER_CAPACITY COLS_AMOUNT * ROW_CAPACITY //forgot what it's for
+
+typedef struct {
+	char text[COLS_AMOUNT];
+    size_t reserve;
+	size_t amount;	
+}Text;
+
+typedef struct {
+	void* pPrev;
+	void* pNext;
+	Text* text;
+}Row;
+
+typedef struct {
+	Row* head;
+	size_t lenght;
+}Head;
+
+Text* get_text(size_t row_pos, Head *head)
+{
+	size_t itr;
+	Row *r = head->head; //TODO: check about allocating to manumulating with data
+	for (itr = 0; itr < row_pos; itr++)
+	{
+		r = r->pNext;
+	}
+	Text *text = r->text;
+	return text;
+}
+
+Row* new_row(void* pPrev, void* pNext)
+{
+	Row *r = malloc(sizeof(Row));
+	r->pPrev = pPrev;
+	r->pNext = pNext;
+	r->text = malloc(sizeof(Text));
+	r->text->reserve = COLS_AMOUNT;
+	r->text->amount = 0;
+	return r;
+}
+
+void init_head(Head* head)
+{
+	head->head = new_row(NULL, NULL);
+	head->lenght = 1;
+}
+
+void insert_row(size_t pos, Head *head)
+{
+	if (head->lenght < 1)
+	{
+		init_head(head);
+		return;
+	}
+	
+	size_t num;
+	Row *r = head->head;
+	for (num = 0; num < pos - 1; num++)
+	{
+		r = r->pNext;
+	}
+
+	Row* newRow = new_row(r, r->pNext);
+	r->pNext = newRow;
+	r = r->pNext;
+	r->pPrev = newRow;
+	head->lenght += 1;
+}
+
+
+typedef struct {
+	Text row[ROW_CAPACITY];
+	size_t reserve;
+	size_t amount;
+}Rows;
+
+typedef struct {
+	size_t y_pos;
+	size_t x_pos;
+}Cursor;
+
+Cursor c = {
+	.y_pos = 0,
+	.x_pos = 0,
+};
+
 #define ASCII_LOW 32
 #define ASCII_HIGH 126
 
@@ -34,9 +126,6 @@ typedef struct {
 	SDL_Rect char_table[ASCII_HIGH - ASCII_LOW + 1];
 } Font;
 
-#define BUFFER_CAPACITY 1024
-char buffer[BUFFER_CAPACITY];
-size_t buffer_reserve = 0;
 
 Font load_font(SDL_Renderer *renderer)
 {
@@ -49,7 +138,7 @@ Font load_font(SDL_Renderer *renderer)
 		scp(SDL_CreateTextureFromSurface(renderer, font_surface));	
 	
 	SDL_FreeSurface(font_surface);
-	
+
 	for (size_t ascii = ASCII_LOW; ascii < ASCII_HIGH; ++ascii)
 	{
 		const size_t index = ascii - ASCII_LOW;
@@ -83,9 +172,8 @@ void render_char(SDL_Renderer *renderer, Font *font, Vec2f pos, char c, float sc
 	scc(SDL_RenderCopy(renderer, font->fontsheet, &font->char_table[index], &dst));
 }
 
-void render_text(SDL_Renderer *renderer, Font *font, Vec2f pos, const char *text, Uint32 color, float scale)
+void render_text(SDL_Renderer *renderer, Font *font, Vec2f pos, Head head, Uint32 color, float scale)
 {
-	size_t text_size = strlen(text);
 	Vec2f pen = pos;
 	scc(SDL_SetTextureAlphaMod(font->fontsheet, (color >> (8 * 3)) & 0xff));
 	scc(SDL_SetTextureColorMod(font->fontsheet, 
@@ -93,11 +181,37 @@ void render_text(SDL_Renderer *renderer, Font *font, Vec2f pos, const char *text
 				  (color >> (8 * 1)) & 0xff,
 				  (color >> (8 * 2)) & 0xff));
 
-	for (size_t i = 0; i < buffer_reserve; i++)
+	Row *row = head.head;
+	for (size_t i = 0; i < head.lenght; i++)
 	{
-		render_char(renderer, font, pen, text[i], scale);
-		pen.x += FONT_CHAR_WIDTH * scale;
+		for (size_t j = 0; j < row->text->amount; j++)
+		{
+			render_char(renderer, font, pen, row->text->text[j], scale);
+			pen.x += FONT_CHAR_WIDTH * scale;
+		}
+		row = row->pNext;
+		pen.y += FONT_CHAR_HEIGHT * scale;
+		pen.x = 0;
 	}
+}
+
+
+#define UNHEX(color) \
+	((color >> (8*0)) & 0xff), \
+	((color >> (8*1)) & 0xff), \
+	((color >> (8*2)) & 0xff), \
+	((color >> (8*3)) & 0xff) 
+
+void render_cursor(SDL_Renderer *renderer, Uint32 color)
+{
+	SDL_Rect cursor = {
+		.x = (int)c.x_pos * FONT_CHAR_WIDTH * FONT_SCALE,
+		.y = (int)c.y_pos * FONT_CHAR_HEIGHT * FONT_SCALE,
+		.w = FONT_CHAR_WIDTH * FONT_SCALE,
+		.h = FONT_CHAR_HEIGHT * FONT_SCALE,
+	};
+	scc(SDL_SetRenderDrawColor(renderer, UNHEX(color)));
+	scc(SDL_RenderFillRect(renderer, &cursor));
 }
 
 int main(int argc, char *argv[])
@@ -111,6 +225,9 @@ int main(int argc, char *argv[])
 		scp(SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED));
 
 	Font font = load_font(renderer);
+	
+	Head head;
+	init_head(&head);
 
 	bool quit = false;
 	while(!quit)
@@ -123,13 +240,30 @@ int main(int argc, char *argv[])
 			case SDL_QUIT: {
 				quit = true;
 				} break;
+			case SDL_KEYDOWN: {
+				switch(event.key.keysym.sym) {
+				case SDLK_BACKSPACE: {
+				//r.row[c.y_pos].amount -= 1; // TODO: handle all cases		
+					}break;
+				}
+				break;
+			}
 			case SDL_TEXTINPUT: {
 				size_t text_size = strlen(event.text.text);
-				const size_t free_buffer = BUFFER_CAPACITY - buffer_reserve;
-				if (text_size > free_buffer)
-					text_size = free_buffer;
-				memcpy(buffer+buffer_reserve, event.text.text, text_size);
-				buffer_reserve += text_size;
+				const size_t free_row = COLS_AMOUNT - get_text(c.y_pos, &head)->amount;
+				if (free_row > text_size)
+				{
+					memcpy(get_text(c.y_pos, &head)->text + c.x_pos , event.text.text, text_size);
+				}
+				else
+				{
+					c.y_pos += 1;
+					c.x_pos = 0;
+					insert_row(c.y_pos, &head);
+					memcpy(get_text(c.y_pos, &head)->text + c.x_pos, event.text.text, text_size);
+				}
+				get_text(c.y_pos, &head)->amount += text_size;
+				c.x_pos += text_size;
 				}break;
 			}		    
 		}
@@ -138,8 +272,8 @@ int main(int argc, char *argv[])
 		scc(SDL_RenderClear(renderer));
 		
 		render_text(renderer, &font, vec2f(0.0, 0.0),
-				buffer, 0xffffffff, 4);
-
+				head, 0xffffffff, FONT_SCALE);
+		render_cursor(renderer, 0xffffffff);
 		SDL_RenderPresent(renderer);
 	}
 
