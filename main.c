@@ -31,40 +31,44 @@ void *scp(void *ptr)
 
 #define ROW_CAPACITY 16
 #define COLS_AMOUNT 16
-#define BUFFER_CAPACITY COLS_AMOUNT * ROW_CAPACITY //forgot what it's for
 
 typedef struct {
 	char text[COLS_AMOUNT];
-    size_t reserve;
-	size_t amount;	
+    size_t reserve; //Max lenght
+	size_t amount;	//Current lenght
 }Text;
 
-typedef struct {
-	void* pPrev;
-	void* pNext;
+typedef struct Row {
+	struct Row* pPrev; 
+	struct Row* pNext; 
 	Text* text;
-}Row;
+}Row_t;
 
 typedef struct {
-	Row* head;
+	Row_t* head;
 	size_t lenght;
 }Head;
 
-Text* get_text(size_t row_pos, Head *head)
+Row_t* get_row_pos(size_t row_pos, Head *head)
 {
-	size_t itr;
-	Row *r = head->head; //TODO: check about allocating to manumulating with data
-	for (itr = 0; itr < row_pos; itr++)
+	Row_t *r = head->head; //TODO: check about allocating to manumulating with data
+	for (size_t itr = 0; itr < row_pos; itr++)
 	{
 		r = r->pNext;
 	}
+	return r;
+}
+
+Text* get_text(size_t row_pos, Head *head)
+{
+	Row_t *r = get_row_pos(row_pos, head); //TODO: check about allocating to manumulating with data
 	Text *text = r->text;
 	return text;
 }
 
-Row* new_row(void* pPrev, void* pNext)
+Row_t* new_row(Row_t* pPrev, Row_t* pNext)
 {
-	Row *r = malloc(sizeof(Row));
+	Row_t *r = malloc(sizeof(Row_t));
 	r->pPrev = pPrev;
 	r->pNext = pNext;
 	r->text = malloc(sizeof(Text));
@@ -87,26 +91,42 @@ void insert_row(size_t pos, Head *head)
 		return;
 	}
 	
-	size_t num;
-	Row *r = head->head;
-	for (num = 0; num < pos - 1; num++)
+	Row_t *r = head->head;
+	for (size_t i = 0; i < pos - 1; i++)
 	{
 		r = r->pNext;
 	}
 
-	Row* newRow = new_row(r, r->pNext);
+	Row_t* newRow = new_row(r, r->pNext);
 	r->pNext = newRow;
-	r = r->pNext;
-	r->pPrev = newRow;
+	//r = r->pNext;
+	//r->pPrev = newRow;
 	head->lenght += 1;
 }
 
+void del_row(Row_t *r, Head *head)
+{
+	if (r->pNext != NULL)
+	{
+		r->pPrev->pNext = r->pNext;
+		r->pNext->pPrev = r->pPrev;
+	}
+	else
+	{
+		r->pPrev->pNext = NULL;
+	}
+	free((void*)r);
+	head->lenght -= 1;
+}
 
-typedef struct {
-	Text row[ROW_CAPACITY];
-	size_t reserve;
-	size_t amount;
-}Rows;
+void delete_row_pos(size_t pos, Head *head)
+{
+	if (pos > 0)
+	{
+		Row_t *r = get_row_pos(pos, head);
+		del_row(r, head);
+	}
+}
 
 typedef struct {
 	size_t y_pos;
@@ -117,6 +137,12 @@ Cursor c = {
 	.y_pos = 0,
 	.x_pos = 0,
 };
+
+void set_cursor(const int x, const int y)
+{
+	c.x_pos = x;
+	c.y_pos = y;
+}
 
 #define ASCII_LOW 32
 #define ASCII_HIGH 126
@@ -181,7 +207,7 @@ void render_text(SDL_Renderer *renderer, Font *font, Vec2f pos, Head head, Uint3
 				  (color >> (8 * 1)) & 0xff,
 				  (color >> (8 * 2)) & 0xff));
 
-	Row *row = head.head;
+	Row_t *row = head.head;
 	for (size_t i = 0; i < head.lenght; i++)
 	{
 		for (size_t j = 0; j < row->text->amount; j++)
@@ -225,7 +251,7 @@ int main(int argc, char *argv[])
 		scp(SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED));
 
 	Font font = load_font(renderer);
-	
+
 	Head head;
 	init_head(&head);
 
@@ -242,9 +268,31 @@ int main(int argc, char *argv[])
 				} break;
 			case SDL_KEYDOWN: {
 				switch(event.key.keysym.sym) {
-				case SDLK_BACKSPACE: {
-				//r.row[c.y_pos].amount -= 1; // TODO: handle all cases		
+				case SDLK_BACKSPACE: { //TODO: handle all cases(cursor pos is 0, deleting empty row)
+					if (!(c.y_pos == 0 && c.x_pos == 0))
+					{
+						Row_t *row = get_row_pos(c.y_pos, &head);
+						Text *txt = row->text;
+						if (txt->amount == 0)
+						{
+							set_cursor(row->pPrev->text->amount, c.y_pos - 1);
+							del_row(row, &head);
+						}
+						else
+						{
+							for(size_t i = c.x_pos; i < txt->amount - 1; i++)
+							{
+								txt->text[i] = txt->text[i - 1]; 
+							}
+							txt->amount -= 1;
+							set_cursor(c.x_pos - 1, c.y_pos);
+						}
+					}		
 					}break;
+				case SDLK_RETURN: {
+					set_cursor(0, c.y_pos + 1);
+					insert_row(c.y_pos, &head);
+				}break;
 				}
 				break;
 			}
@@ -257,8 +305,7 @@ int main(int argc, char *argv[])
 				}
 				else
 				{
-					c.y_pos += 1;
-					c.x_pos = 0;
+					set_cursor(0, c.y_pos + 1);
 					insert_row(c.y_pos, &head);
 					memcpy(get_text(c.y_pos, &head)->text + c.x_pos, event.text.text, text_size);
 				}
